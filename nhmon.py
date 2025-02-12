@@ -628,7 +628,8 @@ class TtyMonitor(NHMonitor):
         m = self.tmux.find_pattern(const.STATUS_CONT_RE)
         if m:
             self.set_turn(int(m.group("turn")))
-            self.set_xplevel(int(m.group("xplevel")))
+            if m.groupdict()["xplevel"] is not None:
+                self.set_xplevel(int(m.group("xplevel")))
         m = self.tmux.find_pattern(const.STATUS_RE)
         if m:
             self.set_charisma(int(m.group("charisma")))
