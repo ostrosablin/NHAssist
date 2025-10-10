@@ -144,7 +144,59 @@ def abbreviate_items(item_list: List[str], target_length: int) -> str:
     result = "/".join(item_list)
     if len(result) <= target_length:
         return result
-    # Begin dynamic resize
+    # Dictionary resize
+    # 5-step dictionary resize
+    items = []
+    no_short = True
+    for i in range(5):
+        min_step = i
+        items = []
+        no_short = i != 0
+        for item in item_list:
+            if i == 0:
+                items.append("".join(map(lambda x: x.capitalize(), item.split())))
+            else:
+                short_forms = const.ABBREV_DICT.get(item)
+                if short_forms is not None:
+                    no_short = False
+                    items.append(short_forms[i - 1])
+                else:
+                    items.append(item)
+        if no_short:
+            break  # No use, list doesn't have an abbrev dict
+        result = "/".join(items)
+        if len(result) <= target_length:
+            if min_step == 0:
+                return result
+            else:
+                break  # Try to refine result
+    else:
+        min_step = -1  # Cannot fit with dict algorithm, skip next step.
+    # Fine tuning - try to squeeze out most of our remaining char budget
+    if not no_short and min_step > 0:
+        final_list = []
+        budget = target_length - len(result)
+        zip_obj = zip(item_list, items)
+        # Heurestics - we expand most heavily shortened item name
+        for item, short in sorted(zip_obj, key=lambda x: len(x[0]) / len(x[1])):
+            if min_step == 1:
+                alternative = "".join(map(lambda x: x.capitalize(), item.split()))
+            else:
+                alternative = item
+                if (short_forms := const.ABBREV_DICT.get(item)) is not None:
+                    alternative = short_forms[min_step - 2]
+            if short == alternative:
+                final_list.append(short)  # No change
+                continue
+            budget_diff = len(alternative) - len(short)
+            if budget_diff > budget:
+                final_list.append(short)
+                continue  # Out of budget, ignore
+            else:
+                final_list.append(alternative)
+                budget -= budget_diff
+        return "/".join(sorted(final_list))
+    # Fallback to old algorithm: begin generic dynamic resize
     items = []
     max_wordlen = 0
     for item in item_list:
