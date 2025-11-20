@@ -102,7 +102,6 @@ implementation for curses.
 - Improve sucker status autodetection and learn more information from game messages,
 parse discoveries list, etc.
 - Support updating item names based on new information.
-- Optimize CPU usage by analysing screen only when it changes.
 - Improve feedback during gameplay.
 - Possibly, some other useful macros and automated real-time analysis.
 

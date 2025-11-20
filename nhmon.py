@@ -61,7 +61,7 @@ class NHMonitor(ABC):
         :param args: Command line arguments.
         """
         # Tmux object
-        self.tmux = Tmux(args.targetpane)
+        self.tmux = Tmux(args.targetpane, args.busy_wait)
 
         # Game state
         self.price_id: Dict[str, PriceIdentifiedItem] = {}

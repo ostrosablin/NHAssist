@@ -38,7 +38,7 @@ class Tmux:
 
     WAIT_DELAY = 0.12
 
-    def __init__(self, pane: str):
+    def __init__(self, pane: str, busy_wait: bool = False):
         """
         Create a new tmux connection.
 
@@ -46,6 +46,9 @@ class Tmux:
         """
         self.pane = pane
         self.session = pane.split(":")[0]
+        self.wait_update = not busy_wait
+        if self.wait_update:
+            self._initialize_updater()
         try:
             self.prev_frame = self.get_frame()
         except TmuxError as e:
@@ -54,24 +57,35 @@ class Tmux:
             ) from e
 
     def _tmux_cmd(
-        self, cmd: str, *args: str | int, sessionwide: bool = False
+        self, cmd: str, *args: str | int, sessionwide: bool | None = False
     ) -> subprocess.CompletedProcess:
         """
         Build and execute a tmux command.
 
         :param cmd: tmux command to execute.
         :param args: Arguments for tmux command.
-        :param sessionwide: If true - pass session name instead of pane to target arg.
+        :param sessionwide: If True - pass session name instead of pane to target arg.
+        If None - don't pass target at all.
         :return: subprocess.CompletedProcess instance for executed command.
         """
         cmdline = [
             "tmux",
-            cmd,
-            "-t",
-            self.session if sessionwide else self.pane,
-            *map(str, args),
+            cmd
         ]
+        if sessionwide is not None:
+            cmdline.extend(("-t", self.session if sessionwide else self.pane))
+        cmdline.extend(map(str, args))
         return run(cmdline, check=True, stdout=PIPE, encoding="utf-8")
+
+    def _initialize_updater(self):
+        """
+        Set up event-driven tmux
+        """
+        self._tmux_cmd("set-window-option", "monitor-activity", "on")
+        self._tmux_cmd("set-option", "activity-action", "any", sessionwide=None)
+        self._tmux_cmd(
+            "set-hook", "-w", "alert-activity", "wait-for -S nhassist"
+        )
 
     def get_frame(self, advance: bool = True) -> str:
         """
@@ -95,6 +109,8 @@ class Tmux:
         :return: String with updated terminal screen (frame).
         """
         while True:
+            if self.wait_update:
+                self._tmux_cmd("wait-for", "nhassist", sessionwide=None)
             frame = self.get_frame(advance=False)
             if frame != self.prev_frame:
                 self.prev_frame = frame

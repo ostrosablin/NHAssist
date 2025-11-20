@@ -44,6 +44,8 @@ parser.add_argument('-l', '--logfile', default=None,
                     help="Path to save log file into (default - don't write logs)")
 parser.add_argument('-e', '--auto-elbereth', action="store_true",
                     help="When engraving in dust with finger, always write Elbereth")
+parser.add_argument('-w', '--busy-wait', action="store_true",
+                    help="Use old busy-waiting tmux screen poller")
 
 try:
     args = parser.parse_args()
