@@ -54,14 +54,14 @@ class NHMonitor(ABC):
     details.
     """
 
-    def __init__(self, args: Namespace):
+    def __init__(self, args: Namespace, tmux: Tmux = None):
         """
         Initialize a new NetHack monitor object.
 
         :param args: Command line arguments.
         """
         # Tmux object
-        self.tmux = Tmux(args.targetpane, args.busy_wait)
+        self.tmux = Tmux(args.targetpane, args.busy_wait) if tmux is None else tmux
 
         # Game state
         self.price_id: Dict[str, PriceIdentifiedItem] = {}

@@ -17,9 +17,11 @@
 """
 A set of primitives to work with tmux session.
 """
+from __future__ import annotations
 
 import re
 import subprocess
+from collections import UserString
 from subprocess import run, PIPE, CalledProcessError
 from time import sleep
 from typing import List, Iterator, Optional
@@ -30,13 +32,184 @@ class TmuxError(Exception):
     Class for tmux-related errors.
     """
 
+class TmuxFrame(UserString):
+    """
+    Class for captured frames (and subframes). For versatility, it's subclassed from
+    UserString, ergo it can be used as a regular string with some neat helper methods.
+
+    Each string is RegEx-searchable, allows easy parsing of sub-panes and generally
+    friendly for dynamic terminal application parsing.
+    """
+
+    def __init__(self, frame: str | TmuxFrame):
+        """
+        Create a new Frame object.
+        """
+        super().__init__(str(frame))
+
+    @classmethod
+    def _parse_curses_panes(cls, frame: str | TmuxFrame) -> list[TmuxFrame]:
+        """
+        Find Curses panes in output and cut out their content.
+
+        Panes are scanned left-to-right top-down, beginning with upper left corner.
+
+        Usually, for NetHack, first pane would be message box, second is perm_invent (if
+        enabled), third is map and fourth - status panel.
+
+        :param frame: String with text representation of screen.
+        :return: A list of pane contents (minus the borders).
+        """
+        frame = str(frame)  # Convert TmuxFrame down to regular str for max performance.
+        lines = frame.split('\n')
+        if not lines or not lines[0]:
+            return []
+
+        height = len(lines)
+        width = max(len(line) for line in lines) if lines else 0
+
+        # Pad all lines to the same width
+        padded_lines = [line.ljust(width) for line in lines]
+
+        # Identify all potential box boundaries
+        corners = {}  # (r, c) -> '┌'/'┐'/'└'/'┘'
+        # horizontal_chars = {'─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴'}
+
+        for r in range(height):
+            for c in range(width):
+                char = padded_lines[r][c]
+                if char in ['┌', '┐', '└', '┘']:
+                    corners[(r, c)] = char
+
+        # Find all possible boxes by matching corners
+        boxes = []
+        corner_positions = list(corners.keys())
+
+        for i, (r1, c1) in enumerate(corner_positions):
+            if corners[(r1, c1)] != '┌':
+                continue
+
+            # Look for matching corners to form a box
+            for r2 in range(r1 + 1, height):
+                if padded_lines[r2][c1] == '│':
+                    continue
+                elif padded_lines[r2][c1] == '└':
+                    # Found bottom-left corner
+                    for c2 in range(c1 + 1, width):
+                        if padded_lines[r1][c2] == '─':
+                            continue
+                        elif padded_lines[r1][c2] == '┐':
+                            # Check if there's a matching bottom-right corner
+                            if (r2, c2) in corners and corners[(r2, c2)] == '┘':
+                                # Verify this is a valid box by checking borders
+                                is_valid_box = True
+
+                                # Check top border
+                                for c in range(c1 + 1, c2):
+                                    if padded_lines[r1][c] not in ['─', '┬']:
+                                        is_valid_box = False
+                                        break
+                                if not is_valid_box:
+                                    continue
+
+                                # Check bottom border
+                                for c in range(c1 + 1, c2):
+                                    if padded_lines[r2][c] not in ['─', '┴']:
+                                        is_valid_box = False
+                                        break
+                                if not is_valid_box:
+                                    continue
+
+                                # Check left border
+                                for r in range(r1 + 1, r2):
+                                    if padded_lines[r][c1] not in ['│', '├']:
+                                        is_valid_box = False
+                                        break
+                                if not is_valid_box:
+                                    continue
+
+                                # Check right border
+                                for r in range(r1 + 1, r2):
+                                    if padded_lines[r][c2] not in ['│', '┤']:
+                                        is_valid_box = False
+                                        break
+                                if not is_valid_box:
+                                    continue
+
+                                boxes.append((r1, c1, r2, c2))
+                            break
+                    break
+
+        # Remove nested boxes (boxes completely inside other boxes)
+        def is_nested(outer_box, inner_box):
+            r1_o, c1_o, r2_o, c2_o = outer_box
+            r1_i, c1_i, r2_i, c2_i = inner_box
+            return (r1_o < r1_i and r2_o > r2_i and
+                    c1_o < c1_i and c2_o > c2_i)
+
+        filtered_boxes = []
+        for i, box in enumerate(boxes):
+            is_nested_in_any = False
+            for j, other_box in enumerate(boxes):
+                if i != j and is_nested(other_box, box):
+                    is_nested_in_any = True
+                    break
+            if not is_nested_in_any:
+                filtered_boxes.append(box)
+
+        # Extract content from each box
+        results = []
+        for r1, c1, r2, c2 in filtered_boxes:
+            content_lines = []
+            for r in range(r1 + 1, r2):
+                content_line = padded_lines[r][c1 + 1:c2]
+                # Remove trailing spaces but preserve internal spaces
+                content_lines.append(content_line.rstrip())
+
+            # Join content lines and add to results if not empty
+            if content_lines:
+                # Remove empty lines at the end
+                while content_lines and content_lines[-1] == '':
+                    content_lines.pop()
+                content = '\n'.join(content_lines)
+                if content.strip():  # Only add if content is not just whitespace
+                    results.append(TmuxFrame(content))
+
+        return results
+
+    def collapse_frame(self) -> TmuxFrame:
+        """
+        Vertically collapse a frame into single line with excessive spacing removed.
+
+        :return: String with newlines and excessive trailing spaces removed.
+        """
+        return TmuxFrame(" ".join(map(lambda x: x.strip(), str(self).splitlines())))
+
+    def find_pattern(self, pattern: str) -> Optional[re.Match[str]]:
+        """
+        Find regex match on the frame.
+
+        :param pattern: Regex to search.
+        :return: Regex match if found, else None.
+        """
+        return re.search(pattern, self.data)
+
+    def find_pattern_iter(self, pattern: str) -> Iterator[re.Match[str]]:
+        """
+        Find all regex pattern matches on the screen.
+
+        :param pattern: Regex to search.
+        :return: Iterator over regex matches.
+        """
+        return re.finditer(pattern, self.data)
+
 
 class Tmux:
     """
     Implementation of various operations over a running tmux session.
     """
 
-    WAIT_DELAY = 0.12
+    WAIT_DELAY: float = 0.12
 
     def __init__(self, pane: str, busy_wait: bool = False):
         """
@@ -44,13 +217,13 @@ class Tmux:
 
         :param pane: Pane to interact with.
         """
-        self.pane = pane
-        self.session = pane.split(":")[0]
-        self.wait_update = not busy_wait
+        self.pane: str = pane
+        self.session: str = pane.split(":")[0]
+        self.wait_update: bool = not busy_wait
         if self.wait_update:
             self._initialize_updater()
         try:
-            self.prev_frame = self.get_frame()
+            self.prev_frame: TmuxFrame = self.get_frame()
         except TmuxError as e:
             raise TmuxError(
                 f"Unable to connect to tmux server! Is pane {pane} correct?"
@@ -77,7 +250,7 @@ class Tmux:
         cmdline.extend(map(str, args))
         return run(cmdline, check=True, stdout=PIPE, encoding="utf-8")
 
-    def _initialize_updater(self):
+    def _initialize_updater(self) -> None:
         """
         Set up event-driven tmux
         """
@@ -87,26 +260,27 @@ class Tmux:
             "set-hook", "-w", "alert-activity", "wait-for -S nhassist"
         )
 
-    def get_frame(self, advance: bool = True) -> str:
+    def get_frame(self, advance: bool = True) -> TmuxFrame:
         """
         Get a frame from tmux session.
 
         :param advance: If true, current frame will replace saved frame.
-        :return: String with representation of terminal screen (frame).
+        Otherwise, a previously cached frame would be returned.
+        :return: TmuxFrame with text representation of terminal screen.
         """
         try:
-            frame = self._tmux_cmd("capture-pane", "-p").stdout
+            frame = TmuxFrame(self._tmux_cmd("capture-pane", "-p").stdout)
         except CalledProcessError as e:
             raise TmuxError("Unable to read from tmux server!") from e
         if advance:
             self.prev_frame = frame
         return frame
 
-    def wait_chg(self) -> str:
+    def wait_chg(self) -> TmuxFrame:
         """
         Wait until tmux screen changes.
 
-        :return: String with updated terminal screen (frame).
+        :return: TmuxFrame with updated terminal screen.
         """
         while True:
             if self.wait_update:
@@ -130,16 +304,6 @@ class Tmux:
                 return res
             sleep(Tmux.WAIT_DELAY)
 
-    @staticmethod
-    def _collapse_frame(frame: str) -> str:
-        """
-        Collapse a frame lines into a single string with excessive spacing removed.
-
-        :param frame: String with text representation of screen.
-        :return: String with newlines and excessive trailing spaces removed.
-        """
-        return " ".join(map(lambda x: x.strip(), frame.splitlines()))
-
     def find_pattern_iter(
         self, pattern: str, collapse: bool = False, advance: bool = False
     ) -> Iterator[re.Match[str]]:
@@ -155,8 +319,8 @@ class Tmux:
             self.get_frame()
         frame = self.prev_frame
         if collapse:
-            frame = self._collapse_frame(frame)
-        return re.finditer(pattern, frame)
+            frame = frame.collapse_frame()
+        return frame.find_pattern_iter(pattern)
 
     def find_pattern(
         self, pattern: str, collapse: bool = False, advance: bool = False
@@ -173,8 +337,8 @@ class Tmux:
             self.get_frame()
         frame = self.prev_frame
         if collapse:
-            frame = self._collapse_frame(frame)
-        return re.search(pattern, frame)
+            frame = frame.collapse_frame()
+        return frame.find_pattern(pattern)
 
     def send_keys(self, keys: str | List[str]) -> None:
         """
@@ -192,7 +356,7 @@ class Tmux:
         except CalledProcessError as e:
             raise TmuxError("Unable to send keys to tmux server!") from e
 
-    def send_keys_and_wait(self, keys: str | List[str]) -> str:
+    def send_keys_and_wait(self, keys: str | List[str]) -> TmuxFrame:
         """
         Send keypresses into tmux pane and wait for screen to change.
 
@@ -201,32 +365,6 @@ class Tmux:
         """
         self.send_keys(keys)
         return self.wait_chg()
-
-    @staticmethod
-    def extract_rectangle_area(
-            frame: str, x: int, y: int, width: int, height: int
-    ) -> str:
-        """
-        Cut out a rectangle area from frame string and return it. May be useful to e.g.
-        extract curses windows.
-
-        :param frame: String with representation of terminal screen (frame).
-        :param x: X coordinate of top right corner of extracted rectangle.
-        :param y: Y coordinate of top right corner of extracted rectangle.
-        :param width: Width of extracted rectangle.
-        :param height: Height of extracted rectangle.
-        :return: String with cut out rectangle section of screen frame.
-        """
-        lines = frame.split("\n")
-
-        selected_lines = lines[y : y + height]
-
-        result = []
-        for line in selected_lines:
-            if len(line) < x + width:
-                line += " " * (x + width - len(line))
-            result.append(line[x : x + width])
-        return "\n".join(result)
 
     def display_message(
         self, text: str, duration: int = 0, modal: bool = False
