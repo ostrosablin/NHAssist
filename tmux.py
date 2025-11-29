@@ -177,6 +177,41 @@ class TmuxFrame(UserString):
 
         return results
 
+    def extract_rectangle_area(
+            self, x: int, y: int, width: int, height: int, padding: bool = False
+    ) -> TmuxFrame:
+        """
+        Cut out a rectangle area from frame string and return a new frame.
+
+        :param x: X coordinate of top right corner of extracted rectangle.
+        :param y: Y coordinate of top right corner of extracted rectangle.
+        :param width: Width of extracted rectangle (negative for full length).
+        :param height: Height of extracted rectangle (negative for full height).
+        :param padding: Whether to pad strings with spaces to make a true rectangle.
+        :return: TmuxFrame with cut out rectangular section of parent frame.
+        """
+        lines = self.data.split("\n")
+
+        selected_lines = lines[y : y + (len(lines) if height < 0 else height)]
+
+        result = []
+        for line in selected_lines:
+            cutwidth = len(line) if width < 0 else width
+            if padding is True and len(line) < x + cutwidth:
+                line += " " * (x + cutwidth - len(line))
+            result.append(line[x : x + cutwidth])
+        return TmuxFrame("\n".join(result))
+
+    def extract_lines(self, first: int, nlines: int) -> TmuxFrame:
+        """
+        Extract a vertical block of (full width) lines into a separate frame.
+
+        :param first: Y coordinate of first extracted line.
+        :param nlines: Number of extracted lines.
+        :return: TmuxFrame with cut out lines from frame.
+        """
+        return self.extract_rectangle_area(0, first, -1, nlines)
+
     def collapse_frame(self) -> TmuxFrame:
         """
         Vertically collapse a frame into single line with excessive spacing removed.
@@ -260,16 +295,20 @@ class Tmux:
             "set-hook", "-w", "alert-activity", "wait-for -S nhassist"
         )
 
-    def get_frame(self, advance: bool = True) -> TmuxFrame:
+    def get_frame(self, advance: bool = True, keep_spaces: bool = False) -> TmuxFrame:
         """
         Get a frame from tmux session.
 
         :param advance: If true, current frame will replace saved frame.
         Otherwise, a previously cached frame would be returned.
+        :param keep_spaces: If true, trailing spaces within lines are preserved.
         :return: TmuxFrame with text representation of terminal screen.
         """
+        args = ["-p"]
+        if keep_spaces:
+            args.append("-N")
         try:
-            frame = TmuxFrame(self._tmux_cmd("capture-pane", "-p").stdout)
+            frame = TmuxFrame(self._tmux_cmd("capture-pane", *args).stdout)
         except CalledProcessError as e:
             raise TmuxError("Unable to read from tmux server!") from e
         if advance:
