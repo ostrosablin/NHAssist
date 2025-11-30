@@ -238,6 +238,19 @@ class TmuxFrame(UserString):
         """
         return re.finditer(pattern, self.data)
 
+    def find_lines_with_pattern(self, pattern: str) -> list[int]:
+        """
+        Find line numbers with matches of pattern.
+
+        :param pattern: Regex to search in lines.
+        :return: List with indices of lines matching the regex.
+        """
+        matches = []
+        for n, line in enumerate(self.splitlines()):
+            if re.search(pattern, line):
+                matches.append(n)
+        return matches
+
 
 class Tmux:
     """
