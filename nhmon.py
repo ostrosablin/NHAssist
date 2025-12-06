@@ -28,12 +28,13 @@ from argparse import Namespace
 from typing import List, Optional, Dict, TypedDict
 
 import const
+from const import MonitorState
 from priceid import (
     abbreviate_items,
     lookup_item,
     find_price_candidates,
 )
-from tmux import Tmux
+from tmux import Tmux, TmuxFrame
 
 
 # TODO: Gem ID, Wand ID, Ring ID
@@ -66,36 +67,36 @@ class NHMonitor(ABC):
         # Game state
         self.price_id: Dict[str, PriceIdentifiedItem] = {}
         self.known_items: Dict[str, str] = {}
-        self.charisma = 0
-        self.xplevel = 0
-        self.sucker = False  # TODO: Autodetect worn shirt or dunce cap?
-        self.tourist = False
+        self.charisma: int = 0
+        self.xplevel: int = 0
+        self.sucker: bool = False  # TODO: Autodetect worn shirt or dunce cap?
+        self.tourist: bool = False
         self.turn: int | None = None
 
         # Internal monitor state:
-        self.state = "init"
+        self.state: MonitorState = MonitorState.ST_INIT
         # This flag enables automatic Elbereth on dust finger-engraving.
-        self.autoeword = args.auto_elbereth
+        self.autoeword: bool = args.auto_elbereth
         # This flag indicates that NHAssist is quitting and will stop main loop.
-        self.stopping = False
+        self.stopping: bool = False
         # This flag would cause NHMonitor to be recreated and will reset it's state.
-        self.reset = False
+        self.reset: bool = False
         # Duration for messages, displayed via tmux display-message. Hardcoded for now.
-        self.msg_duration = 2
+        self.msg_duration: int | float = 2
         # Align turnlimits on multiples of turnlimit (e.g. 500, 1000, 1500).
-        self.aligned_turnlimit = args.aligned_turnlimit
+        self.aligned_turnlimit: bool = args.aligned_turnlimit
         # Turnlimit - how many turns to give player?
-        self.turnlimit = args.turnlimit
+        self.turnlimit: int = args.turnlimit
         # Save and quit on hitting the turn.
-        self.stop_on_turn = 0
+        self.stop_on_turn: int = 0
         # Max description length for called items.
-        self.max_abbrev_length = args.abbreviation_length
+        self.max_abbrev_length: int = args.abbreviation_length
         # Persistence file path.
-        self.persistence_file = args.persistence
+        self.persistence_file: str = args.persistence
         if self.persistence_file is not None:
             self.persistence_load()
         # Persistence is dirty (needs to be saved) flag.
-        self.dirty = False
+        self.dirty: bool = False
 
     def persistence_load(self) -> None:
         """
@@ -373,6 +374,7 @@ class NHMonitor(ABC):
         """
         self.persistence_save()
         frame = self.tmux.get_frame()
+        features = self.get_frame_features(frame)
         self.find_stats()
         if self.state == "sync":
             if self.is_dead(frame):
@@ -398,15 +400,27 @@ class NHMonitor(ABC):
                     return
 
     @abstractmethod
-    def find_stats(self) -> None:
+    def get_frame_features(self, frame: TmuxFrame) -> dict[str, TmuxFrame]:
         """
-        Windowport-specific method of reading main attributes from bottom status lines.
-        :return:
+        Windowport-specific method to extract main window features - map window,
+        top line, bottom line and other features and windows.
+
+        :param frame: Full-screen frame of NetHack pane.
+        :return: List of TmuxFrame objects of detected features.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def is_writing_eword(self, frame: str) -> bool:
+    def find_stats(self) -> None:
+        """
+        Windowport-specific method of reading main attributes from bottom status lines.
+
+        :return: None.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def is_writing_eword(self, frame: TmuxFrame) -> bool:
         """
         Windowport-specific method of checking, whether we do dust engraving to
         autotype Elbereth. Works only if autoeword is enabled.
@@ -427,7 +441,7 @@ class NHMonitor(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def invoke_ewait(self, frame: str) -> bool:
+    def invoke_ewait(self, frame: TmuxFrame) -> bool:
         """
         Detect that player wants to sleep a single turn while standing on dust Elbereth.
         Windowport-specific.
@@ -451,7 +465,7 @@ class NHMonitor(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def is_dead(self, frame: str) -> bool:
+    def is_dead(self, frame: TmuxFrame) -> bool:
         """
         Windowport-specific method of checking, if player is dead (DYWYPI).
 
@@ -488,7 +502,7 @@ class NHMonitor(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def dispatch_price_id(self, item) -> bool:
+    def dispatch_price_id(self, item: str) -> bool:
         """
         Fill type name of price-identified item. Windowport-specific.
 
@@ -507,7 +521,7 @@ class NHMonitor(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def read_extcmd(self, frame) -> Optional[str]:
+    def read_extcmd(self, frame: TmuxFrame) -> Optional[str]:
         """
         Fetch an extended command that's being typed. Windowport-specific.
 
@@ -532,7 +546,19 @@ class TtyMonitor(NHMonitor):
     Implementation of NetHack monitor for tty windowport.
     """
 
-    def read_extcmd(self, frame: str) -> Optional[str]:
+    def get_frame_features(self, frame: TmuxFrame) -> dict[str, TmuxFrame]:
+        features = {"full": frame}
+        # Try to locate botl - if it's not present - we may be in menu.
+        status = frame.find_lines_with_pattern(const.STATUS_RE)
+        if status:
+            # tty layout: 1 topl, 2 botl with map between.
+            features["topl"] = frame.extract_lines(0, 1)
+            features["extcmd"] = features["topl"]
+            features["map"] = frame.extract_lines(1, status[-1] - 1)
+            features["botl"] = frame.extract_lines(status[-1], 2)
+        return features
+
+    def read_extcmd(self, frame: TmuxFrame) -> Optional[str]:
         """
         Detect extended command being entered. We scan top line for # prefix.
 
@@ -606,7 +632,7 @@ class TtyMonitor(NHMonitor):
         matches.extend(self.tmux.find_pattern_iter(const.SALE_RE, collapse=True))
         matches.extend(self.tmux.find_pattern_iter(const.PICKUP_SALE_RE, collapse=True))
         for m in matches:
-            item = (
+            item = str(
                 m.group("item")
                 .replace("potions", "potion")
                 .replace("scrolls", "scroll")
@@ -652,7 +678,7 @@ class TtyMonitor(NHMonitor):
             return True
         return False
 
-    def is_writing_eword(self, frame: str) -> bool:
+    def is_writing_eword(self, frame: TmuxFrame) -> bool:
         """
         Detect a message, indicating that player is writing in dust with fingertip.
         It's used for auto-elbereth feature, which will automatically engrave Elbereth,
@@ -664,7 +690,7 @@ class TtyMonitor(NHMonitor):
         """
         return "You write in the dust with your fingertip.--More--" in frame
 
-    def invoke_ewait(self, frame: str) -> bool:
+    def invoke_ewait(self, frame: TmuxFrame) -> bool:
         """
         Detect player's attempt to wait a turn on square with Elbereth engravement.
         It's bound to Ctrl+E and uses the fact that in non-wizmode games, this hotkey
@@ -722,7 +748,7 @@ class TtyMonitor(NHMonitor):
             logging.info("Unknown messages, unable to perform Elbereth rest")
             break
 
-    def skip_more(self, frame: str, skipall: bool = False) -> None:
+    def skip_more(self, frame: TmuxFrame, skipall: bool = False) -> None:
         """
         Find --More-- prompt on screen and skip it.
 

@@ -18,6 +18,13 @@
 Constants that are used across NHAssist.
 """
 
+from enum import StrEnum
+
+# Enums:
+class MonitorState(StrEnum):
+    ST_INIT = "init"
+    ST_SYNC = "sync"
+
 # Parsing regexes:
 # Price ID regexes
 SALE_RE = (
