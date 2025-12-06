@@ -47,8 +47,7 @@ class TmuxFrame(UserString):
         """
         super().__init__(str(frame))
 
-    @classmethod
-    def _parse_curses_panes(cls, frame: str | TmuxFrame) -> list[TmuxFrame]:
+    def parse_curses_panes(self) -> list[TmuxFrame]:
         """
         Find Curses panes in output and cut out their content.
 
@@ -60,8 +59,7 @@ class TmuxFrame(UserString):
         :param frame: String with text representation of screen.
         :return: A list of pane contents (minus the borders).
         """
-        frame = str(frame)  # Convert TmuxFrame down to regular str for max performance.
-        lines = frame.split('\n')
+        lines = self.data.split('\n')
         if not lines or not lines[0]:
             return []
 
