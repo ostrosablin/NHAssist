@@ -251,6 +251,17 @@ class TmuxFrame(UserString):
                 matches.append(n)
         return matches
 
+    def get_dimensions(self) -> tuple[int, int]:
+        """
+        Measure bounding box size for this frame or subframe.
+
+        :return: Tuple with width and height of this TmuxFrame.
+        """
+        lines = self.data.splitlines()
+        height = len(lines)
+        width = max(map(lambda x: len(x), lines))
+        return width, height
+
 
 class Tmux:
     """
