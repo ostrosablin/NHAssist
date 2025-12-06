@@ -56,6 +56,8 @@ class TmuxFrame(UserString):
         Usually, for NetHack, first pane would be message box, second is perm_invent (if
         enabled), third is map and fourth - status panel.
 
+        This works for UTF-8 boxes as well as for VT100 ACS line drawing chars.
+
         :param frame: String with text representation of screen.
         :return: A list of pane contents (minus the borders).
         """
@@ -76,7 +78,7 @@ class TmuxFrame(UserString):
         for r in range(height):
             for c in range(width):
                 char = padded_lines[r][c]
-                if char in ['┌', '┐', '└', '┘']:
+                if char in ['┌', '┐', '└', '┘', 'l', 'k', 'm', 'j']:
                     corners[(r, c)] = char
 
         # Find all possible boxes by matching corners
@@ -84,27 +86,27 @@ class TmuxFrame(UserString):
         corner_positions = list(corners.keys())
 
         for i, (r1, c1) in enumerate(corner_positions):
-            if corners[(r1, c1)] != '┌':
+            if corners[(r1, c1)] not in ('┌', 'l'):
                 continue
 
             # Look for matching corners to form a box
             for r2 in range(r1 + 1, height):
-                if padded_lines[r2][c1] == '│':
+                if padded_lines[r2][c1] in ('│', 'x'):
                     continue
-                elif padded_lines[r2][c1] == '└':
+                elif padded_lines[r2][c1] in ('└', 'm'):
                     # Found bottom-left corner
                     for c2 in range(c1 + 1, width):
-                        if padded_lines[r1][c2] == '─':
+                        if padded_lines[r1][c2] in ('─', 'q'):
                             continue
-                        elif padded_lines[r1][c2] == '┐':
+                        elif padded_lines[r1][c2] in ('┐', 'k'):
                             # Check if there's a matching bottom-right corner
-                            if (r2, c2) in corners and corners[(r2, c2)] == '┘':
+                            if (r2, c2) in corners and corners[(r2, c2)] in ('┘', 'j'):
                                 # Verify this is a valid box by checking borders
                                 is_valid_box = True
 
                                 # Check top border
                                 for c in range(c1 + 1, c2):
-                                    if padded_lines[r1][c] not in ['─', '┬']:
+                                    if padded_lines[r1][c] not in ['─', '┬', 'q', 'w']:
                                         is_valid_box = False
                                         break
                                 if not is_valid_box:
@@ -112,7 +114,7 @@ class TmuxFrame(UserString):
 
                                 # Check bottom border
                                 for c in range(c1 + 1, c2):
-                                    if padded_lines[r2][c] not in ['─', '┴']:
+                                    if padded_lines[r2][c] not in ['─', '┴', 'q', 'v']:
                                         is_valid_box = False
                                         break
                                 if not is_valid_box:
@@ -120,7 +122,7 @@ class TmuxFrame(UserString):
 
                                 # Check left border
                                 for r in range(r1 + 1, r2):
-                                    if padded_lines[r][c1] not in ['│', '├']:
+                                    if padded_lines[r][c1] not in ['│', '├', 'x', 't']:
                                         is_valid_box = False
                                         break
                                 if not is_valid_box:
@@ -128,7 +130,7 @@ class TmuxFrame(UserString):
 
                                 # Check right border
                                 for r in range(r1 + 1, r2):
-                                    if padded_lines[r][c2] not in ['│', '┤']:
+                                    if padded_lines[r][c2] not in ['│', '┤', 'x', 'u']:
                                         is_valid_box = False
                                         break
                                 if not is_valid_box:
